@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
-import * as XLSX from 'xlsx';
-import { Download, FileSpreadsheet, FileText, Printer, Table2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Download, FileSpreadsheet, FileText, FileDown, Loader2, Printer, Table2 } from 'lucide-react';
 import { useApp } from '../store';
 import { buildReport, catalog, downloadBlob, reportCsv } from '../lib/reports';
 import { todayIso } from '../lib/model';
@@ -12,6 +12,9 @@ export default function Reports() {
   const [type, setType] = useState('school_schedule');
   const [params, setParams] = useState<any>({ sectionId: db.sections[0]?.id, teacherId: db.teachers[0]?.id, date: todayIso(), from: '', to: '' });
   const [report, setReport] = useState<any>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [searchParams] = useSearchParams();
+  const printRef = useRef<HTMLDivElement | null>(null);
 
   const meta = types.find((t) => t.type === type);
   const needs = (meta as any)?.needs;
@@ -29,8 +32,9 @@ export default function Reports() {
     downloadBlob(`${report.filename}.csv`, new Blob([reportCsv(report)], { type: 'text/csv;charset=utf-8' }));
   }
 
-  function exportXlsx() {
+  async function exportXlsx() {
     if (!report) return;
+    const XLSX = await import('xlsx');
     const cols = report.columns || [];
     const data = (report.rows || []).map((row: any) => {
       const obj: any = {};
@@ -46,12 +50,52 @@ export default function Reports() {
     downloadBlob(`${report.filename}.xlsx`, new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
   }
 
+  async function exportPdf() {
+    if (!report) return;
+    setPdfBusy(true);
+    try {
+      const { exportElementPdf } = await import('../lib/pdf');
+      await exportElementPdf(printRef.current, {
+        filename: report.filename,
+        title: report.title,
+        subtitle: report.subtitle,
+        schoolName: db.school.name,
+        logo: db.school.logo,
+        academicYear: db.school.academic_year,
+        term: db.school.term,
+        principal: db.school.principal,
+        landscape: Boolean(report.grid),
+        note: report.summary?.length ? report.summary.join(' · ') : '',
+      });
+      toast('ok', 'تم إنشاء ملف PDF');
+    } catch (err: any) { toast('err', err.message || 'تعذّر إنشاء PDF'); }
+    finally { setPdfBusy(false); }
+  }
+
+  // فتح تقرير مباشرة من البحث الشامل (?type=teacher_schedule&teacher=3).
+  useEffect(() => {
+    const t = searchParams.get('type');
+    if (!t) return;
+    const teacher = Number(searchParams.get('teacher') || 0);
+    const section = Number(searchParams.get('section') || 0);
+    const next = {
+      ...params,
+      ...(teacher ? { teacherId: teacher } : {}),
+      ...(section ? { sectionId: section } : {}),
+    };
+    setType(t);
+    setParams(next);
+    try { setReport(buildReport({ type: t, params: next, db })); } catch { /* تجاهل */ }
+    // مرة واحدة عند الدخول من رابط.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const gridDays = report?.grid?.days || [];
   const gridPeriods = report?.grid?.periods || [];
 
   return (
     <div>
-      <PageHeader icon={FileText} title="التقارير" subtitle="12 تقريرًا مع معاينة وتصدير CSV وExcel وطباعة عربية" />
+      <PageHeader icon={FileText} title="التقارير" subtitle="13 تقريرًا مع معاينة وتصدير CSV وExcel وPDF عربي حقيقي" />
 
       <div className="no-print mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
         {types.map((t: any) => (
@@ -92,14 +136,17 @@ export default function Reports() {
             <>
               <button className="btn-ghost" onClick={exportCsv}><Download size={15} /> CSV</button>
               <button className="btn-ghost" onClick={exportXlsx}><FileSpreadsheet size={15} /> Excel</button>
-              <button className="btn-ghost" onClick={() => window.print()}><Printer size={15} /> طباعة / PDF</button>
+              <button className="btn-primary" onClick={exportPdf} disabled={pdfBusy}>
+                {pdfBusy ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />} {pdfBusy ? 'جارٍ إنشاء PDF…' : 'PDF احترافي'}
+              </button>
+              <button className="btn-ghost" onClick={() => window.print()}><Printer size={15} /> طباعة</button>
             </>
           ) : null}
         </div>
       </Card>
 
       {report ? (
-        <div className="print-area">
+        <div className="print-area" ref={printRef}>
           <div className="mb-4 hidden items-center justify-between border-b border-slate-300 pb-3 print:flex print-only">
             <div>
               <div className="text-lg font-extrabold">{db.school.name}</div>
@@ -179,7 +226,7 @@ export default function Reports() {
             <FileText className="text-slate-300" size={40} />
             <div className="font-bold">اختر تقريرًا ثم اضغط «معاينة»</div>
             <p className="max-w-md text-xs leading-5 text-slate-400">
-              التصدير إلى CSV يضيف BOM ليفتح عربيًا في Excel. طباعة PDF تستخدم نافذة الطباعة وترويسة المدرسة والشعار.
+              التصدير إلى CSV يضيف BOM ليفتح عربيًا في Excel. «PDF احترافي» يُنشئ ملف PDF داخل التطبيق بترويسة المدرسة والشعار وتشكيل عربي صحيح، و«طباعة» تبقى متاحة.
             </p>
           </div>
         </Card>

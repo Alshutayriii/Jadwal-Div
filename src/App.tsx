@@ -1,21 +1,23 @@
+import { lazy } from 'react';
 import { HashRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { useApp } from './store';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import Teachers from './pages/Teachers';
-import Subjects from './pages/Subjects';
-import Sections from './pages/Sections';
-import School from './pages/School';
-import CalendarPage from './pages/Calendar';
 import Timetable from './pages/Timetable';
-import Absence from './pages/Absence';
-import Duty from './pages/Duty';
-import Reports from './pages/Reports';
-import Users from './pages/Users';
-import Settings from './pages/Settings';
-import Portal from './pages/Portal';
-import Tv from './pages/Tv';
+
+const Portal = lazy(() => import('./pages/Portal'));
+const School = lazy(() => import('./pages/School'));
+const Teachers = lazy(() => import('./pages/Teachers'));
+const Subjects = lazy(() => import('./pages/Subjects'));
+const Sections = lazy(() => import('./pages/Sections'));
+const CalendarPage = lazy(() => import('./pages/Calendar'));
+const Absence = lazy(() => import('./pages/Absence'));
+const Duty = lazy(() => import('./pages/Duty'));
+const Reports = lazy(() => import('./pages/Reports'));
+const Users = lazy(() => import('./pages/Users'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Tv = lazy(() => import('./pages/Tv'));
 
 function Splash() {
   return (
@@ -43,26 +45,26 @@ export default function App() {
   return (
     <HashRouter>
       <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route element={<RequireAuth />}>
-          <Route element={<Layout />}>
-            <Route index element={<Dashboard />} />
-            <Route path="portal" element={<Portal />} />
-            <Route path="school" element={<School />} />
-            <Route path="teachers" element={<Teachers />} />
-            <Route path="subjects" element={<Subjects />} />
-            <Route path="sections" element={<Sections />} />
-            <Route path="calendar" element={<CalendarPage />} />
-            <Route path="timetable" element={<Timetable />} />
-            <Route path="absence" element={<Absence />} />
-            <Route path="duty" element={<Duty />} />
-            <Route path="reports" element={<Reports />} />
-            <Route path="users" element={<Users />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="tv" element={<Tv />} />
+          <Route path="/login" element={<Login />} />
+          <Route element={<RequireAuth />}>
+            <Route element={<Layout />}>
+              <Route index element={<Dashboard />} />
+              <Route path="portal" element={<Portal />} />
+              <Route path="school" element={<School />} />
+              <Route path="teachers" element={<Teachers />} />
+              <Route path="subjects" element={<Subjects />} />
+              <Route path="sections" element={<Sections />} />
+              <Route path="calendar" element={<CalendarPage />} />
+              <Route path="timetable" element={<Timetable />} />
+              <Route path="absence" element={<Absence />} />
+              <Route path="duty" element={<Duty />} />
+              <Route path="reports" element={<Reports />} />
+              <Route path="users" element={<Users />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path="tv" element={<Tv />} />
+            </Route>
           </Route>
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </HashRouter>
   );

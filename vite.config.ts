@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['fonts/Cairo-Variable.ttf', 'icon-180.png'],
+      includeAssets: ['icon-180.png'],
       manifest: {
         name: 'جدول المدرسة Pro',
         short_name: 'جدول المدرسة',

@@ -362,9 +362,10 @@ function detect(ctx) {
   };
 }
 
-/** فحص حصة واحدة قبل حفظها/نقلها. */
+/** فحص حصة واحدة قبل حفظها/نقلها. ignore يمكن أن يكون معرّفًا أو قائمة معرّفات. */
 function validatePlacement(candidate, ctx, ignoreLessonId = null) {
-  const lessons = (ctx.lessons || []).filter(l => l.id !== ignoreLessonId);
+  const ignore = new Set((Array.isArray(ignoreLessonId) ? ignoreLessonId : [ignoreLessonId]).filter(v => v != null));
+  const lessons = (ctx.lessons || []).filter(l => !ignore.has(l.id));
   const room = ctx.rooms.find(r => r.id === candidate.room_id);
   const teacher = ctx.teachers.find(t => t.id === candidate.teacher_id);
   const subject = ctx.subjects.find(s => s.id === candidate.subject_id);

@@ -1,12 +1,13 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Users, Layers, BookOpen, Grid3X3, AlertTriangle, ShieldCheck, CalendarDays, ArrowLeft,
+  Users, Layers, BookOpen, Grid3X3, AlertTriangle, ShieldCheck, CalendarDays, ArrowLeft, Gauge,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useApp } from '../store';
 import { activeSchedule, dayIdxForDate, enrich, scheduleLessons, todayIso } from '../lib/model';
 import { detect } from '../lib/conflicts';
+import { qualityOf } from '../lib/scheduler.js';
 import { Badge, Card, PageHeader, StatCard } from '../components/ui';
 
 const TL: Record<string, string> = {
@@ -23,6 +24,9 @@ export default function Dashboard() {
   const lessons = useMemo(() => (sch ? scheduleLessons(db, sch.id) : []), [db, sch]);
   const ctx = useMemo(() => enrich(db), [db]);
   const conflicts = useMemo(() => detect({ ...ctx, lessons, school: db.school }), [ctx, lessons, db.school]);
+  const quality = useMemo(() => qualityOf(lessons, {
+    ...ctx, periodOrder: new Map(db.periods.map((p, i) => [p.id, i])),
+  }), [lessons, ctx, db.periods]);
 
   const required = db.assignments.reduce((s, a) => s + Number(a.weekly_periods || 0), 0);
   const todayIdx = dayIdxForDate(todayIso());
@@ -57,6 +61,7 @@ export default function Dashboard() {
         <StatCard label="مناوبات شاغرة" value={vacantDuties} hint={`${db.duties.length} مناوبة`} icon={ShieldCheck} tone={vacantDuties ? 'amber' : 'green'} />
         <StatCard label="غياب اليوم" value={todayCovers} hint="حصص انتظار مسجلة" icon={CalendarDays} tone="amber" />
         <StatCard label="الأنشطة القادمة" value={db.calendar_events.filter((e) => e.start_date >= todayIso()).length} hint="من التقويم الدراسي" icon={CalendarDays} tone="teal" />
+        <StatCard label="جودة الجدول" value={`${quality.score}/100`} hint={`${quality.grade} · ${quality.teacherGaps} فراغ معلم`} icon={Gauge} tone={quality.score >= 85 ? 'green' : quality.score >= 70 ? 'teal' : 'amber'} />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-3">

@@ -1,5 +1,6 @@
 import { activeCtx, activeSchedule, enrich, fmtDate, nowIso, scheduleLessons } from './model';
 import { detect } from './conflicts';
+import { qualityOf } from './scheduler.js';
 
 const TYPE_LABEL: Record<string, string> = {
   holiday: 'إجازة رسمية', school_holiday: 'إجازة مدرسية', exam: 'اختبارات', event: 'فعالية', other: 'أخرى',
@@ -288,6 +289,59 @@ export function buildReport({ type, params, db }: { type: string; params?: any; 
         filename: 'تقرير-المواد',
       };
     }
+    case 'quality': {
+      const periodIdx = new Map(ctx.periods.map((p: any, i: number) => [p.id, i]));
+      const quality = qualityOf(allLessons, { ...ctx, periodOrder: periodIdx });
+      const byTeacherDay = new Map<string, number[]>();
+      for (const l of allLessons) {
+        if (!l.teacher_id) continue;
+        const k = `${l.teacher_id}|${l.day_id}`;
+        if (!byTeacherDay.has(k)) byTeacherDay.set(k, []);
+        byTeacherDay.get(k)!.push(Number(periodIdx.get(l.period_id) || 0));
+      }
+      const gapsOf = (arr: number[]) => {
+        const idxs = arr.slice().sort((a, b) => a - b);
+        let g = 0;
+        for (let i = 1; i < idxs.length; i++) g += Math.max(0, idxs[i] - idxs[i - 1] - 1);
+        return g;
+      };
+      const rows = ctx.teachers.map((t: any) => {
+        const mine = allLessons.filter((l: any) => l.teacher_id === t.id);
+        const planned = ctx.assignments.filter((a: any) => a.teacher_id === t.id)
+          .reduce((sum: number, a: any) => sum + Number(a.weekly_periods || 0), 0);
+        const daysUsed = new Set(mine.map((l: any) => l.day_id)).size;
+        const perDay = [...byTeacherDay.entries()].filter(([k]) => k.startsWith(`${t.id}|`)).map(([, v]) => v);
+        const gaps = perDay.reduce((sum, arr) => sum + gapsOf(arr), 0);
+        const busiest = perDay.reduce((m, arr) => Math.max(m, arr.length), 0);
+        return {
+          name: t.name, specialty: t.specialty || '', planned, placed: mine.length,
+          diff: mine.length - planned, daysUsed, perDay: daysUsed ? (mine.length / daysUsed).toFixed(1) : '0',
+          busiest, gaps, maxDaily: t.max_daily,
+        };
+      }).sort((a: any, b: any) => b.gaps - a.gaps);
+      return {
+        ...base,
+        title: 'تقرير جودة الجدول',
+        subtitle: `${sch ? sch.name : ''} — ${school.academic_year || ''}`,
+        quality,
+        columns: [
+          { key: 'name', label: 'المعلم', width: 22 }, { key: 'specialty', label: 'التخصص', width: 14 },
+          { key: 'planned', label: 'المطلوب', width: 9 }, { key: 'placed', label: 'الموزع', width: 9 },
+          { key: 'diff', label: 'الفرق', width: 8 }, { key: 'daysUsed', label: 'أيام', width: 7 },
+          { key: 'perDay', label: 'متوسط/يوم', width: 10 }, { key: 'busiest', label: 'أكثر يوم', width: 9 },
+          { key: 'gaps', label: 'فراغات', width: 8 }, { key: 'maxDaily', label: 'الحد اليومي', width: 10 },
+        ],
+        rows,
+        summary: [
+          `الجودة: ${quality.score}/100 (${quality.grade})`,
+          `التغطية: ${quality.coverage}%`,
+          `فراغات المعلمين: ${quality.teacherGaps}`,
+          `انتشار المواد: ${quality.spreadRatio}%`,
+          `عدالة الأنصبة: ${quality.fairness}%`,
+        ],
+        filename: 'تقرير-جودة-الجدول',
+      };
+    }
     case 'rooms': {
       const rows = ctx.rooms.map((r: any) => {
         const count = allLessons.filter((l: any) => l.room_id === r.id).length;
@@ -335,6 +389,7 @@ export function catalog() {
     { type: 'covers', title: 'حصص الانتظار', icon: 'swap', needs: 'date' },
     { type: 'absence', title: 'سجل الغياب', icon: 'calendar', needs: 'range' },
     { type: 'duties', title: 'الإشراف والمناوبة', icon: 'shield' },
+    { type: 'quality', title: 'جودة الجدول', icon: 'gauge' },
     { type: 'conflicts', title: 'التعارضات', icon: 'alert' },
     { type: 'unplaced', title: 'الحصص غير الموزعة', icon: 'clock' },
     { type: 'subjects', title: 'المواد الدراسية', icon: 'book' },

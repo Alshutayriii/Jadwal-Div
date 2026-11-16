@@ -1,7 +1,7 @@
 {
   "name": "school-timetable-lovable",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "جدول المدرسة Pro — نسخة React + Vite + PWA جاهزة لـ Lovable، تعمل دون إنترنت وتحفظ البيانات محليًا.",
   "scripts": {
@@ -12,7 +12,10 @@
   "dependencies": {
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.2",
     "lucide-react": "^0.452.0",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
@@ -21,6 +24,7 @@
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.2",

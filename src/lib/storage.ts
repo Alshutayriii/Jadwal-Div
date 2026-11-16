@@ -4,6 +4,7 @@ import { DEMO_USERS } from './auth';
 import { nowIso } from './model';
 
 const KEY = 'stp-react-db-v1';
+const SESSION_KEY = 'stp-react-session-v1';
 
 export function normalizeSeed(): DB {
   const raw: any = JSON.parse(JSON.stringify(seedJson));
@@ -77,6 +78,23 @@ export function saveDB(db: DB): void {
 
 export function clearDB(): void {
   localStorage.removeItem(KEY);
+}
+
+export function loadSession<T>(): T | null {
+  try {
+    const text = localStorage.getItem(SESSION_KEY);
+    return text ? (JSON.parse(text) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSession(session: unknown): void {
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* ignore */ }
+}
+
+export function clearSession(): void {
+  localStorage.removeItem(SESSION_KEY);
 }
 
 export function exportDB(db: DB): string {

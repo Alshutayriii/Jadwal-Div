@@ -1,6 +1,8 @@
 import { create } from 'zustand';
-import type { DB, Session, Toast } from './types';
-import { clearDB, exportDB, loadDB, normalizeSeed, parseBackup, saveDB } from './lib/storage';
+import type { DB, Lesson, Session, Toast } from './types';
+import {
+  clearDB, clearSession, exportDB, loadDB, loadSession, normalizeSeed, parseBackup, saveDB, saveSession,
+} from './lib/storage';
 import { DEMO_USERS, hashPassword, verifyPassword } from './lib/auth';
 import {
   activeCtx, activeSchedule, buildSchedulerInput, enrich, nowIso, scheduleLessons, uid,
@@ -30,12 +32,68 @@ const TABLES: Record<string, keyof DB> = {
   assignments: 'assignments', absences: 'absences', covers: 'covers', duties: 'duties',
 };
 
+/** لقطة من حصص جدول واحد، لأجل التراجع/الإعادة. */
+export interface LessonSnapshot {
+  scheduleId: number;
+  lessons: Lesson[];
+  label: string;
+  at: string;
+}
+
+const HARD_TYPES = [
+  'teacher_clash', 'section_clash', 'room_clash',
+  'teacher_daily', 'section_daily', 'teacher_overload',
+];
+
+const HARD_LABEL: Record<string, string> = {
+  teacher_clash: 'تعارض معلم', section_clash: 'تعارض شعبة', room_clash: 'تعارض قاعة',
+  teacher_daily: 'تجاوز الحد اليومي للمعلم', section_daily: 'سقف يوم الشعبة',
+  teacher_overload: 'تجاوز النصاب الأسبوعي',
+};
+
+function lessonSnapshot(db: DB, scheduleId: number): Lesson[] {
+  return db.lessons.filter((l) => l.schedule_id === scheduleId).map((l) => ({ ...l }));
+}
+
+function hardCounts(db: DB, scheduleId: number): Record<string, number> {
+  const res = detect({ ...enrich(db), lessons: scheduleLessons(db, scheduleId), school: db.school });
+  const out: Record<string, number> = {};
+  for (const t of HARD_TYPES) out[t] = res.byType?.[t] || 0;
+  return out;
+}
+
+/** يصف التعارضات الحقيقية لحصة بعد وضعها في مكانها على نسخة معدّلة. */
+function clashProblems(db: DB, lesson: Lesson): string[] {
+  const problems: string[] = [];
+  const tName = db.teachers.find((t) => t.id === lesson.teacher_id)?.name || '';
+  const rName = db.rooms.find((r) => r.id === lesson.room_id)?.name || '';
+  const others = db.lessons.filter((o) => o.id !== lesson.id && o.schedule_id === lesson.schedule_id
+    && o.day_id === lesson.day_id && o.period_id === lesson.period_id);
+  for (const o of others) {
+    const sec = db.sections.find((s) => s.id === o.section_id)?.name || '';
+    const grade = db.grades.find((g) => g.id === db.sections.find((s) => s.id === o.section_id)?.grade_id)?.name || '';
+    if (lesson.teacher_id && o.teacher_id === lesson.teacher_id) {
+      problems.push(`المعلم ${tName} لديه حصة أخرى مع ${grade} شعبة ${sec} في هذا الوقت.`);
+    }
+    if (o.section_id === lesson.section_id) {
+      problems.push('الشعبة لديها حصة أخرى في هذا الوقت.');
+    }
+    if (lesson.room_id && o.room_id === lesson.room_id) {
+      problems.push(`القاعة ${rName} مستخدمة في هذا الوقت.`);
+    }
+  }
+  return [...new Set(problems)];
+}
+
+
 interface AppState {
   db: DB;
   session: Session | null;
   ready: boolean;
   toasts: Toast[];
   lastCovers: any | null;
+  history: LessonSnapshot[];
+  future: LessonSnapshot[];
   init: () => Promise<void>;
   login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => void;
@@ -49,11 +107,15 @@ interface AppState {
   deleteAssignment: (id: number) => void;
   generateSchedule: (options?: any) => any;
   publishSchedule: (id: number) => void;
-  validateLesson: (candidate: any, ignoreId?: number | null) => { ok: boolean; problems: string[] };
+  validateLesson: (candidate: any, ignoreId?: number | number[] | null) => { ok: boolean; problems: string[] };
   addLesson: (candidate: any) => { ok: boolean; problems: string[] };
   updateLesson: (id: number, patch: any) => { ok: boolean; problems: string[] };
   deleteLesson: (id: number) => void;
   toggleLock: (id: number) => void;
+  pushHistory: (label: string) => void;
+  undo: () => string | null;
+  redo: () => string | null;
+  moveLesson: (id: number, dayId: number, periodId: number) => { ok: boolean; problems: string[]; swap?: boolean };
   allocateAbsences: (date: string, teacherIds: number[], reason?: string, options?: any) => any;
   setCoverSubstitute: (coverId: number, teacherId: number) => void;
   clearCovers: (date: string) => void;
@@ -83,6 +145,8 @@ export const useApp = create<AppState>((set, get) => ({
   ready: false,
   toasts: [],
   lastCovers: null,
+  history: [],
+  future: [],
 
   async init() {
     let db = loadDB();
@@ -101,7 +165,14 @@ export const useApp = create<AppState>((set, get) => ({
     if (!db.settings.theme) db.settings.theme = 'light';
     if (db.settings.theme === 'dark') document.documentElement.classList.add('dark');
     saveDB(db);
-    set({ db, ready: true, ...(changed ? {} : {}) });
+    // استعادة الجلسة بعد إعادة تحميل الصفحة (محليًا فقط).
+    const cached = loadSession<Session>();
+    const user = cached?.user ? db.users.find((u) => u.id === cached.user.id) : null;
+    const session: Session | null = user
+      ? { user, role: user.role, teacherId: user.teacher_id ?? null, at: nowIso() }
+      : null;
+    if (!session) clearSession();
+    set({ db, ready: true, session, ...(changed ? {} : {}) });
   },
 
   async login(username, password) {
@@ -116,14 +187,16 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (!ok) return { ok: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' };
     const session: Session = { user, role: user.role, teacherId: user.teacher_id ?? null, at: nowIso() };
-    get().log('تسجيل دخول', 'users', user.username);
     set({ session });
+    saveSession(session);
+    get().log('تسجيل دخول', 'users', user.username);
     return { ok: true };
   },
 
   logout() {
     const name = get().session?.user?.username;
     if (name) get().log('تسجيل خروج', 'users', name);
+    clearSession();
     set({ session: null, lastCovers: null });
   },
 
@@ -277,6 +350,7 @@ export const useApp = create<AppState>((set, get) => ({
     const sch = activeSchedule(db);
     if (!sch) throw new Error('لا يوجد جدول. ولّد جدولًا أولًا.');
     db.lessons.push({ ...candidate, id: uid(db.lessons), schedule_id: sch.id, locked: candidate.locked || 0 });
+    get().pushHistory('إضافة حصة');
     saveDB(db);
     set({ db });
     return check;
@@ -290,6 +364,7 @@ export const useApp = create<AppState>((set, get) => ({
     const check = get().validateLesson(candidate, id);
     if (!check.ok) return check;
     Object.assign(current, patch);
+    get().pushHistory('تعديل حصة');
     saveDB(db);
     set({ db });
     return check;
@@ -298,6 +373,7 @@ export const useApp = create<AppState>((set, get) => ({
   deleteLesson(id) {
     const db = clone(get().db);
     db.lessons = db.lessons.filter((l) => l.id !== id);
+    get().pushHistory('حذف حصة');
     saveDB(db);
     set({ db });
   },
@@ -306,8 +382,88 @@ export const useApp = create<AppState>((set, get) => ({
     const db = clone(get().db);
     const l = db.lessons.find((x) => x.id === id);
     if (l) l.locked = l.locked ? 0 : 1;
+    get().pushHistory('تغيير التثبيت');
     saveDB(db);
     set({ db });
+  },
+
+  pushHistory(label) {
+    const db = get().db;
+    const sch = activeSchedule(db);
+    if (!sch) return;
+    const entry: LessonSnapshot = {
+      scheduleId: sch.id, lessons: lessonSnapshot(db, sch.id), label, at: nowIso(),
+    };
+    const history = [...get().history, entry].slice(-40);
+    set({ history, future: [] });
+  },
+
+  undo() {
+    const { history, future, db: current } = get();
+    const entry = history[history.length - 1];
+    if (!entry) return null;
+    const db = clone(current);
+    const now: LessonSnapshot = {
+      scheduleId: entry.scheduleId, lessons: lessonSnapshot(db, entry.scheduleId), label: entry.label, at: nowIso(),
+    };
+    db.lessons = db.lessons.filter((l) => l.schedule_id !== entry.scheduleId)
+      .concat(entry.lessons.map((l) => ({ ...l })));
+    saveDB(db);
+    set({ db, history: history.slice(0, -1), future: [...future, now].slice(-40) });
+    return entry.label;
+  },
+
+  redo() {
+    const { history, future, db: current } = get();
+    const entry = future[future.length - 1];
+    if (!entry) return null;
+    const db = clone(current);
+    const now: LessonSnapshot = {
+      scheduleId: entry.scheduleId, lessons: lessonSnapshot(db, entry.scheduleId), label: entry.label, at: nowIso(),
+    };
+    db.lessons = db.lessons.filter((l) => l.schedule_id !== entry.scheduleId)
+      .concat(entry.lessons.map((l) => ({ ...l })));
+    saveDB(db);
+    set({ db, future: future.slice(0, -1), history: [...history, now].slice(-40) });
+    return entry.label;
+  },
+
+  /**
+   * نقل حصة إلى خانة أخرى. إن كانت الخانة مشغولة بحصة الشعبة نفسها يتم تبديلهما.
+   * يُرفض النقل إذا أنتج تعارضًا صارمًا جديدًا (معلم/شعبة/قاعة/حدود يومية).
+   */
+  moveLesson(id, dayId, periodId) {
+    const db = clone(get().db);
+    const lesson = db.lessons.find((l) => l.id === id);
+    if (!lesson) throw new Error('الحصة غير موجودة');
+    const sid = lesson.schedule_id;
+    if (lesson.day_id === dayId && lesson.period_id === periodId) return { ok: true, problems: [] };
+    const target = db.lessons.find((l) => l.id !== id && l.schedule_id === sid
+      && l.section_id === lesson.section_id && l.day_id === dayId && l.period_id === periodId);
+    const before = hardCounts(db, sid);
+    const fromDay = lesson.day_id;
+    const fromPeriod = lesson.period_id;
+    lesson.day_id = dayId;
+    lesson.period_id = periodId;
+    if (target) {
+      target.day_id = fromDay;
+      target.period_id = fromPeriod;
+    }
+    const after = hardCounts(db, sid);
+    const problems: string[] = [];
+    for (const t of HARD_TYPES) {
+      if ((after[t] || 0) > (before[t] || 0)) {
+        const detail = clashProblems(db, lesson).concat(target ? clashProblems(db, target) : []);
+        problems.push(...(detail.length ? detail : [`الحركة تُنشئ ${HARD_LABEL[t] || t}.`]));
+      }
+    }
+    if (problems.length) {
+      return { ok: false, problems: [...new Set(problems)] };
+    }
+    get().pushHistory(target ? 'تبديل حصتين' : 'نقل حصة');
+    saveDB(db);
+    set({ db });
+    return { ok: true, problems: [], swap: !!target };
   },
 
   allocateAbsences(date, teacherIds, reason, options = {}) {
@@ -498,6 +654,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   async resetDemo() {
+    clearSession();
     const db = normalizeSeed();
     for (const user of db.users) {
       const demo = DEMO_USERS.find((d) => d.username === user.username);
