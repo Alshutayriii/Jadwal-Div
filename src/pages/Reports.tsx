@@ -86,16 +86,16 @@ export default function Reports() {
     setType(t);
     setParams(next);
     try { setReport(buildReport({ type: t, params: next, db })); } catch { /* تجاهل */ }
-    // مرة واحدة عند الدخول من رابط.
+    // يتحدث عند الدخول برابط عميق أو تغيير نوع التقرير في العنوان.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams]);
 
   const gridDays = report?.grid?.days || [];
   const gridPeriods = report?.grid?.periods || [];
 
   return (
     <div>
-      <PageHeader icon={FileText} title="التقارير" subtitle="13 تقريرًا مع معاينة وتصدير CSV وExcel وPDF عربي حقيقي" />
+      <PageHeader icon={FileText} title="التقارير" subtitle={`${types.length} تقريرًا مع معاينة وتصدير CSV وExcel وPDF عربي حقيقي`} />
 
       <div className="no-print mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
         {types.map((t: any) => (
@@ -115,14 +115,14 @@ export default function Reports() {
               </select>
             </Field>
           ) : null}
-          {needs === 'teacher' ? (
+          {needs === 'teacher' || needs === 'teacher_date' ? (
             <Field label="المعلم">
               <select className="input" value={params.teacherId || ''} onChange={(e) => setParams({ ...params, teacherId: Number(e.target.value) })}>
                 {db.teachers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </select>
             </Field>
           ) : null}
-          {needs === 'date' ? (
+          {needs === 'date' || needs === 'teacher_date' ? (
             <Field label="التاريخ"><input className="input" type="date" value={params.date} onChange={(e) => setParams({ ...params, date: e.target.value })} /></Field>
           ) : null}
           {needs === 'range' ? (

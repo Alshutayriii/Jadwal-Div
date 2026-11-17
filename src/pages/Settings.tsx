@@ -15,8 +15,9 @@ import {
 const MODULES = [
   ['dashboard', 'لوحة التحكم'], ['portal', 'بوابة المعلم'], ['school', 'بيانات المدرسة'],
   ['teachers', 'المعلمون'], ['subjects', 'المواد'], ['sections', 'الصفوف والشعب'],
-  ['timetable', 'الجدول'], ['absence', 'الغياب'], ['duty', 'الإشراف'],
-  ['calendar', 'التقويم'], ['reports', 'التقارير'], ['users', 'المستخدمون'], ['settings', 'الإعدادات'],
+  ['timetable', 'الجدول'], ['exams', 'جدول الاختبارات'], ['absence', 'الغياب'], ['duty', 'الإشراف'],
+  ['calendar', 'التقويم'], ['reports', 'التقارير'], ['data', 'الاستيراد والتصدير'],
+  ['users', 'المستخدمون'], ['settings', 'الإعدادات'],
 ];
 const ROLES = [
   ['system_admin', 'مدير النظام'], ['principal', 'مدير المدرسة'], ['vice', 'الوكيل'],
@@ -63,6 +64,7 @@ export default function Settings() {
 
   function doBackup() {
     downloadBlob(`نسخة-جدول-المدرسة-${new Date().toISOString().slice(0, 10)}.json`, new Blob([backup()], { type: 'application/json' }));
+    setSetting('last_backup', new Date().toISOString());
     toast('ok', 'تم تنزيل النسخة الاحتياطية');
   }
 
@@ -86,6 +88,7 @@ export default function Settings() {
     try {
       const text = await encryptText(backup(), encPass);
       downloadBlob(`نسخة-مشفرة-${new Date().toISOString().slice(0, 10)}.json`, new Blob([text], { type: 'application/json' }));
+      setSetting('last_backup', new Date().toISOString());
       setEncPass('');
       setEncPass2('');
       toast('ok', 'تم إنشاء النسخة المشفّرة (AES-256-GCM)');

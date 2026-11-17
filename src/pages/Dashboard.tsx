@@ -2,11 +2,13 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Users, Layers, BookOpen, Grid3X3, AlertTriangle, ShieldCheck, CalendarDays, ArrowLeft, Gauge,
+  ClipboardList, CheckCircle2,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useApp } from '../store';
 import { activeSchedule, dayIdxForDate, enrich, scheduleLessons, todayIso } from '../lib/model';
 import { detect } from '../lib/conflicts';
+import { examConflicts } from '../lib/exams';
 import { qualityOf } from '../lib/scheduler.js';
 import { Badge, Card, PageHeader, StatCard } from '../components/ui';
 
@@ -40,6 +42,24 @@ export default function Dashboard() {
   const vacantDuties = db.duties.filter((d) => !d.teacher_id).length;
   const todayCovers = db.covers.filter((c) => c.date === todayIso()).length;
 
+  const examsDiag = useMemo(() => examConflicts(db, db.exams || []), [db]);
+  const readiness = useMemo(() => {
+    const gaps = db.assignments.filter((a) => !a.teacher_id).length;
+    const load = new Map<number, number>();
+    for (const a of db.assignments) {
+      if (a.teacher_id) load.set(Number(a.teacher_id), (load.get(Number(a.teacher_id)) || 0) + Number(a.weekly_periods || 0));
+    }
+    const overloaded = db.teachers.filter((t) => t.active !== 0 && (load.get(t.id) || 0) > t.weekly_load).length;
+    return [
+      { label: 'الجدول الدراسي', detail: sch ? `${conflicts.errors} تعارضًا` : 'لم يُولّد بعد', status: !sch ? 'missing' : conflicts.errors ? 'warn' : 'ready', to: '/timetable' },
+      { label: 'إسناد المعلمين', detail: gaps ? `${gaps} إسنادًا بلا معلم` : 'كل الإسنادات مكتملة', status: gaps ? 'warn' : 'ready', to: '/sections' },
+      { label: 'الأنصبة', detail: overloaded ? `${overloaded} معلمًا فوق النصاب` : 'داخل النصاب', status: overloaded ? 'warn' : 'ready', to: '/teachers' },
+      { label: 'جدول الاختبارات', detail: db.exams.length ? `${db.exams.length} اختبارًا · ${examsDiag.errors} تعارضًا` : 'لم يُولّد بعد', status: !db.exams.length ? 'missing' : examsDiag.errors ? 'warn' : 'ready', to: '/exams' },
+      { label: 'المناوبات', detail: db.duties.length ? `${vacantDuties} شاغرة من ${db.duties.length}` : 'لم تُولّد بعد', status: !db.duties.length ? 'missing' : vacantDuties ? 'warn' : 'ready', to: '/duty' },
+      { label: 'النسخ الاحتياطي', detail: db.settings.last_backup ? 'توجد نسخة أخيرة' : 'لم تُنشأ نسخة بعد', status: db.settings.last_backup ? 'ready' : 'warn', to: '/settings' },
+    ] as { label: string; detail: string; status: 'ready' | 'warn' | 'missing'; to: string }[];
+  }, [db, sch, conflicts.errors, examsDiag.errors, vacantDuties]);
+
   return (
     <div>
       <PageHeader
@@ -62,6 +82,7 @@ export default function Dashboard() {
         <StatCard label="غياب اليوم" value={todayCovers} hint="حصص انتظار مسجلة" icon={CalendarDays} tone="amber" />
         <StatCard label="الأنشطة القادمة" value={db.calendar_events.filter((e) => e.start_date >= todayIso()).length} hint="من التقويم الدراسي" icon={CalendarDays} tone="teal" />
         <StatCard label="جودة الجدول" value={`${quality.score}/100`} hint={`${quality.grade} · ${quality.teacherGaps} فراغ معلم`} icon={Gauge} tone={quality.score >= 85 ? 'green' : quality.score >= 70 ? 'teal' : 'amber'} />
+        <StatCard label="جدول الاختبارات" value={db.exams.length} hint={`${examsDiag.errors} تعارضًا · ${examsDiag.warnings} تنبيهًا`} icon={ClipboardList} tone={db.exams.length && !examsDiag.errors ? 'green' : 'amber'} />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-3">
@@ -102,6 +123,32 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+
+      <Card className="mt-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="font-extrabold">جاهزية المدرسة</h2>
+          <Badge tone={readiness.every((r) => r.status === 'ready') ? 'green' : 'amber'}>
+            {readiness.filter((r) => r.status === 'ready').length}/{readiness.length} جاهز
+          </Badge>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {readiness.map((check) => (
+            <Link key={check.label} to={check.to}
+              className="flex items-center gap-3 rounded-xl border border-slate-100 px-3 py-2.5 text-xs transition hover:border-brand-300 dark:border-slate-800">
+              <span className={check.status === 'ready'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : check.status === 'warn' ? 'text-amber-600 dark:text-amber-400' : 'text-rose-600 dark:text-rose-400'}>
+                {check.status === 'ready' ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-bold">{check.label}</span>
+                <span className="block truncate text-slate-400">{check.detail}</span>
+              </span>
+              <ArrowLeft size={14} className="text-slate-300" />
+            </Link>
+          ))}
+        </div>
+      </Card>
 
       <Card className="mt-4">
         <div className="mb-3 flex items-center justify-between">

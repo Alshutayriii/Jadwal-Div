@@ -44,6 +44,11 @@ export interface Lesson {
   subject_id: number; teacher_id?: number | null; room_id?: number | null;
   day_id: number; period_id: number; locked?: number;
 }
+export interface Exam {
+  id: number; title?: string; subject_id: number; grade_id?: number | null; section_id?: number | null;
+  day_id: number; period_id: number; room_id?: number | null; invigilator_id?: number | null;
+  duration?: number; notes?: string;
+}
 export interface Absence { id: number; date: string; teacher_id: number; reason?: string; note?: string; created_at?: string; }
 export interface Cover {
   id: number; date: string; absence_id?: number | null; lesson_id?: number | null;
@@ -74,6 +79,7 @@ export interface DB {
   teacher_subjects: TeacherSubject[];
   teacher_unavailable: Unavailable[];
   assignments: Assignment[];
+  exams: Exam[];
   schedules: Schedule[];
   lessons: Lesson[];
   absences: Absence[];

@@ -1,17 +1,42 @@
 import { useMemo, useState } from 'react';
-import { Layers, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Layers, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { useApp, usePerm } from '../store';
-import { Badge, DataTable, Field, Modal, PageHeader, cn } from '../components/ui';
+import { Badge, Card, DataTable, Field, Modal, PageHeader, cn } from '../components/ui';
+import { autoAssignTeachers } from '../lib/assignments';
 
 type Tab = 'sections' | 'grades' | 'rooms' | 'assignments';
 
 export default function Sections() {
-  const { db, saveEntity, deleteEntity, saveAssignment, deleteAssignment, toast } = useApp();
+  const { db, saveEntity, deleteEntity, saveAssignment, deleteAssignment, autoAssignTeachers: applyAutoAssign, toast } = useApp();
   const canEdit = usePerm('sections', 'edit');
   const [tab, setTab] = useState<Tab>('sections');
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<any>({});
   const [editing, setEditing] = useState<number | null>(null);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignOptions, setAssignOptions] = useState({ overwrite: false, respectLoad: true, preferQualified: true });
+  const [assignPreview, setAssignPreview] = useState<any>(null);
+
+  function openAutoAssign() {
+    const opts = { ...assignOptions };
+    setAssignPreview(autoAssignTeachers(db, opts));
+    setAssignOpen(true);
+  }
+
+  function previewAssign(next = assignOptions) {
+    setAssignOptions(next);
+    setAssignPreview(autoAssignTeachers(db, next));
+  }
+
+  function applyAssign() {
+    try {
+      const result = applyAutoAssign(assignOptions);
+      toast(result.unresolved.length ? 'info' : 'ok',
+        `تم توزيع ${result.assigned} إسنادًا${result.unresolved.length ? ` — ${result.unresolved.length} بلا مرشح` : ''}`);
+      setAssignOpen(false);
+      setAssignPreview(null);
+    } catch (err: any) { toast('err', err.message); }
+  }
 
   const gradeName = (id: number) => db.grades.find((g) => g.id === id)?.name || '';
   const roomName = (id?: number | null) => db.rooms.find((r) => r.id === id)?.name || '—';
@@ -153,32 +178,45 @@ export default function Sections() {
       ) : null}
 
       {tab === 'assignments' ? (
-        <DataTable
-          rows={db.assignments}
-          pageSize={15}
-          columns={[
-            { key: 'section', label: 'الشعبة', render: (r: any) => `${gradeName(db.sections.find((s) => s.id === r.section_id)?.grade_id || 0)} — ${db.sections.find((s) => s.id === r.section_id)?.name || ''}` },
-            { key: 'subject', label: 'المادة', render: (r: any) => subjectName(r.subject_id) },
-            { key: 'teacher', label: 'المعلم', render: (r: any) => teacherName(r.teacher_id) },
-            { key: 'weekly', label: 'حصص أسبوعية', render: (r: any) => r.weekly_periods },
-            { key: 'room', label: 'القاعة', render: (r: any) => roomName(r.room_id) },
-            {
-              key: 'load', label: 'نصاب المعلم',
-              render: (r: any) => {
-                const t = db.teachers.find((x) => x.id === r.teacher_id);
-                if (!t) return <Badge tone="rose">بلا معلم</Badge>;
-                const n = loadByTeacher.get(t.id) || 0;
-                return <Badge tone={n > t.weekly_load ? 'rose' : 'green'}>{n} / {t.weekly_load}</Badge>;
-              },
-            },
-          ]}
-          actions={(r: any) => (
-            <div className="flex gap-1">
-              <button className="btn-ghost btn-sm" onClick={() => start('assignments', r)} disabled={!canEdit}><Pencil size={14} /></button>
-              <button className="btn-ghost btn-sm text-rose-600" onClick={() => remove('assignments', r)} disabled={!canEdit}><Trash2 size={14} /></button>
+        <div>
+          <Card className="mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="flex items-center gap-2 font-extrabold"><Sparkles size={17} /> توزيع الإسنادات تلقائيًا</h2>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  يوزّع المعلمين على الإسنادات وفق المؤهل (teacher_subjects) والتخصص والنصاب المتبقي، مع معاينة كاملة قبل التطبيق.
+                </p>
+              </div>
+              {canEdit ? <button className="btn-primary" onClick={openAutoAssign}><Sparkles size={16} /> معاينة وتوزيع</button> : null}
             </div>
-          )}
-        />
+          </Card>
+          <DataTable
+            rows={db.assignments}
+            pageSize={15}
+            columns={[
+              { key: 'section', label: 'الشعبة', render: (r: any) => `${gradeName(db.sections.find((s) => s.id === r.section_id)?.grade_id || 0)} — ${db.sections.find((s) => s.id === r.section_id)?.name || ''}` },
+              { key: 'subject', label: 'المادة', render: (r: any) => subjectName(r.subject_id) },
+              { key: 'teacher', label: 'المعلم', render: (r: any) => teacherName(r.teacher_id) },
+              { key: 'weekly', label: 'حصص أسبوعية', render: (r: any) => r.weekly_periods },
+              { key: 'room', label: 'القاعة', render: (r: any) => roomName(r.room_id) },
+              {
+                key: 'load', label: 'نصاب المعلم',
+                render: (r: any) => {
+                  const t = db.teachers.find((x) => x.id === r.teacher_id);
+                  if (!t) return <Badge tone="rose">بلا معلم</Badge>;
+                  const n = loadByTeacher.get(t.id) || 0;
+                  return <Badge tone={n > t.weekly_load ? 'rose' : 'green'}>{n} / {t.weekly_load}</Badge>;
+                },
+              },
+            ]}
+            actions={(r: any) => (
+              <div className="flex gap-1">
+                <button className="btn-ghost btn-sm" onClick={() => start('assignments', r)} disabled={!canEdit}><Pencil size={14} /></button>
+                <button className="btn-ghost btn-sm text-rose-600" onClick={() => remove('assignments', r)} disabled={!canEdit}><Trash2 size={14} /></button>
+              </div>
+            )}
+          />
+        </div>
       ) : null}
 
       <Modal
@@ -252,6 +290,87 @@ export default function Sections() {
             </Field>
           </> : null}
         </form>
+      </Modal>
+
+      <Modal
+        open={assignOpen}
+        onClose={() => { setAssignOpen(false); setAssignPreview(null); }}
+        title="التوزيع التلقائي للإسنادات"
+        wide
+        footer={(
+          <>
+            <button className="btn-ghost" onClick={() => { setAssignOpen(false); setAssignPreview(null); }}>إلغاء</button>
+            <button className="btn-ghost" onClick={() => previewAssign()}><Sparkles size={15} /> تحديث المعاينة</button>
+            <button className="btn-primary" onClick={applyAssign} disabled={!assignPreview?.assigned}>تطبيق {assignPreview?.assigned || 0} تغييرًا</button>
+          </>
+        )}
+      >
+        <div className="grid gap-4">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <label className="flex items-start gap-2 rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-800">
+              <input type="checkbox" className="mt-0.5" checked={assignOptions.overwrite}
+                onChange={(e) => previewAssign({ ...assignOptions, overwrite: e.target.checked })} />
+              <span><span className="block font-bold">إعادة توزيع المسند</span>يستبدل المعلم الحالي أيضًا، لا الإسنادات الفارغة فقط.</span>
+            </label>
+            <label className="flex items-start gap-2 rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-800">
+              <input type="checkbox" className="mt-0.5" checked={assignOptions.respectLoad}
+                onChange={(e) => previewAssign({ ...assignOptions, respectLoad: e.target.checked })} />
+              <span><span className="block font-bold">مراعاة النصاب</span>لا يتجاوز النصاب الأسبوعي المتبقي للمعلم.</span>
+            </label>
+            <label className="flex items-start gap-2 rounded-xl border border-slate-200 p-3 text-xs dark:border-slate-800">
+              <input type="checkbox" className="mt-0.5" checked={assignOptions.preferQualified}
+                onChange={(e) => previewAssign({ ...assignOptions, preferQualified: e.target.checked })} />
+              <span><span className="block font-bold">المؤهل فقط</span>يقصر المرشحين على مؤهلي المادة أو تخصصها.</span>
+            </label>
+          </div>
+
+          {assignPreview ? (
+            <>
+              <div className="flex flex-wrap gap-2">
+                <Badge tone="green">تغييرات: {assignPreview.assigned}</Badge>
+                <Badge tone="brand">مطابق مسبقًا: {assignPreview.skipped}</Badge>
+                <Badge tone={assignPreview.unresolved.length ? 'rose' : 'green'}>بلا مرشح: {assignPreview.unresolved.length}</Badge>
+              </div>
+
+              {assignPreview.changed.length ? (
+                <div>
+                  <div className="label">أول التغييرات المقترحة</div>
+                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-2 text-xs dark:border-slate-800">
+                    {assignPreview.changed.slice(0, 40).map((a: any) => {
+                      const sec = db.sections.find((s) => s.id === a.section_id);
+                      const grade = db.grades.find((g) => g.id === sec?.grade_id)?.name || '';
+                      return (
+                        <div key={a.id} className="flex flex-wrap items-center gap-1.5">
+                          <span className="font-semibold">{grade} {sec?.name || ''}</span>
+                          <span className="text-slate-400">·</span>
+                          <span>{subjectName(a.subject_id)}</span>
+                          <span className="text-slate-400">←</span>
+                          <span className="font-semibold text-brand-700 dark:text-brand-300">{teacherName(a.teacher_id)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {assignPreview.unresolved.length ? (
+                <div>
+                  <div className="label">إسنادات بلا مرشح مناسب</div>
+                  <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl bg-rose-50 p-2 text-xs text-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+                    {assignPreview.unresolved.slice(0, 40).map((u: any, i: number) => {
+                      const sec = db.sections.find((s) => s.id === u.assignment.section_id);
+                      return <div key={i}>{sec?.name || ''} — {subjectName(u.assignment.subject_id)}: {u.reason}</div>;
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              <p className="text-[11px] leading-5 text-slate-500">
+                لا يُحفظ شيء قبل «تطبيق». بعد التطبيق أعد توليد الجدول أو راجع التعارضات لأن تغيير المعلم قد يغيّر التوزيع.
+              </p>
+            </>
+          ) : <p className="text-xs text-slate-500">جارٍ حساب المعاينة…</p>}
+        </div>
       </Modal>
     </div>
   );

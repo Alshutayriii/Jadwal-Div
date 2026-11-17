@@ -1,6 +1,7 @@
-import { activeCtx, activeSchedule, enrich, fmtDate, nowIso, scheduleLessons } from './model';
+import { activeCtx, activeSchedule, dayIdxForDate, enrich, fmtDate, nowIso, scheduleLessons, todayIso } from './model';
 import { detect } from './conflicts';
 import { qualityOf } from './scheduler.js';
+import { examConflicts } from './exams';
 
 const TYPE_LABEL: Record<string, string> = {
   holiday: 'إجازة رسمية', school_holiday: 'إجازة مدرسية', exam: 'اختبارات', event: 'فعالية', other: 'أخرى',
@@ -289,6 +290,117 @@ export function buildReport({ type, params, db }: { type: string; params?: any; 
         filename: 'تقرير-المواد',
       };
     }
+    case 'today_schedule': {
+      const date = p.date || todayIso();
+      const idx = dayIdxForDate(date);
+      const day = ctx.days.find((d: any) => d.idx === idx);
+      const ls = day ? allLessons.filter((l: any) => l.day_id === day.id) : [];
+      const groups = ctx.sections.map((s: any) => ({
+        title: `${s.grade_name || ''} — شعبة ${s.name}`,
+        filter: (l: any) => l.section_id === s.id,
+      }));
+      return {
+        ...base,
+        title: 'جدول اليوم',
+        subtitle: `${day ? day.name : 'يوم غير دراسي'} — ${fmtDate(date)}`,
+        grid: buildGrid(ls, ctx, groups),
+        columns: [
+          { key: 'day', label: 'اليوم' }, { key: 'period', label: 'الحصة' },
+          { key: 'grade', label: 'الصف' }, { key: 'section', label: 'الشعبة' },
+          { key: 'subject', label: 'المادة' }, { key: 'teacher', label: 'المعلم' }, { key: 'room', label: 'القاعة' },
+        ],
+        rows: flatLessons(ls),
+        summary: [`الحصص: ${ls.length}`, `الشعب: ${new Set(ls.map((l: any) => l.section_id)).size}`],
+        filename: `جدول-اليوم-${date}`,
+      };
+    }
+    case 'teacher_day': {
+      const date = p.date || todayIso();
+      const idx = dayIdxForDate(date);
+      const day = ctx.days.find((d: any) => d.idx === idx);
+      const teacher = ctx.teachers.find((t: any) => String(t.id) === String(p.teacherId)) || ctx.teachers[0];
+      if (!teacher) throw new Error('لا يوجد معلمون');
+      const ls = day ? allLessons.filter((l: any) => l.teacher_id === teacher.id && l.day_id === day.id) : [];
+      return {
+        ...base,
+        title: `دوام المعلم ${teacher.name}`,
+        subtitle: `${day ? day.name : 'يوم غير دراسي'} — ${fmtDate(date)}`,
+        grid: buildGrid(ls, ctx, [{ title: teacher.name, subtitle: teacher.specialty, filter: (l: any) => l.teacher_id === teacher.id }]),
+        columns: [
+          { key: 'period', label: 'الحصة' }, { key: 'grade', label: 'الصف' }, { key: 'section', label: 'الشعبة' },
+          { key: 'subject', label: 'المادة' }, { key: 'room', label: 'القاعة' },
+        ],
+        rows: ls.map((l: any) => ({ period: l.period_name, grade: l.grade_name, section: l.section_name, subject: l.subject_name, room: l.room_name || '—' })),
+        summary: [`حصص اليوم: ${ls.length}`, `النصاب: ${teacher.weekly_load}`],
+        filename: `دوام-المعلم-${teacher.name}-${date}`,
+      };
+    }
+    case 'exams': {
+      const exams = db.exams || [];
+      const grades = new Map<number, string>(db.grades.map((g: any) => [g.id, g.name]));
+      const sections = new Map<number, any>(db.sections.map((s: any) => [s.id, s]));
+      const subjects = new Map<number, string>(db.subjects.map((s: any) => [s.id, s.name]));
+      const teachers = new Map<number, string>(db.teachers.map((t: any) => [t.id, t.name]));
+      const rooms = new Map<number, string>(db.rooms.map((r: any) => [r.id, r.name]));
+      const days = new Map<number, any>(db.days.map((d: any) => [d.id, d]));
+      const periods = new Map<number, any>(db.periods.map((x: any) => [x.id, x]));
+      const filtered = exams.filter((e: any) => !p.gradeId || Number(e.grade_id) === Number(p.gradeId)
+        || Number(sections.get(Number(e.section_id))?.grade_id) === Number(p.gradeId));
+      const examConflict = examConflicts(db, exams);
+      const rows = filtered.map((e: any) => {
+        const sec: any = sections.get(Number(e.section_id));
+        return {
+          day: days.get(e.day_id)?.name || '', period: periods.get(e.period_id)?.name || '',
+          grade: grades.get(Number(sec?.grade_id)) || '', section: sec?.name || '',
+          subject: subjects.get(e.subject_id) || '', room: rooms.get(Number(e.room_id)) || '',
+          invigilator: teachers.get(Number(e.invigilator_id)) || '—',
+          duration: e.duration || 60, notes: e.notes || '',
+          sortDay: days.get(e.day_id)?.idx || 0, sortPeriod: periods.get(e.period_id)?.idx || 0,
+        };
+      }).sort((a: any, b: any) => a.sortDay - b.sortDay || a.sortPeriod - b.sortPeriod
+        || String(a.grade).localeCompare(String(b.grade), 'ar') || String(a.section).localeCompare(String(b.section), 'ar'));
+      return {
+        ...base,
+        title: 'جدول الاختبارات',
+        subtitle: `${school.academic_year || ''} — ${examConflict.errors ? `${examConflict.errors} تعارضًا` : 'لا تعارضات'}`,
+        columns: [
+          { key: 'day', label: 'اليوم' }, { key: 'period', label: 'الحصة' },
+          { key: 'grade', label: 'الصف' }, { key: 'section', label: 'الشعبة' },
+          { key: 'subject', label: 'المادة' }, { key: 'room', label: 'القاعة' },
+          { key: 'invigilator', label: 'المراقب' }, { key: 'duration', label: 'المدة' },
+        ],
+        rows,
+        summary: [`الاختبارات: ${filtered.length}`, `تعارضات: ${examConflict.errors}`, `تنبيهات: ${examConflict.warnings}`],
+        filename: 'جدول-الاختبارات',
+      };
+    }
+    case 'readiness': {
+      const conf = detect({ ...ctx, lessons: allLessons, school: ctx.school });
+      const examConflict = examConflicts(db, db.exams || []);
+      const noTeacher = ctx.assignments.filter((a: any) => !a.teacher_id).length;
+      const over = ctx.assignments.reduce((map: Map<number, number>, a: any) => {
+        if (a.teacher_id) map.set(a.teacher_id, (map.get(a.teacher_id) || 0) + Number(a.weekly_periods || 0));
+        return map;
+      }, new Map());
+      const overloaded = ctx.teachers.filter((t: any) => (over.get(t.id) || 0) > t.weekly_load).length;
+      const checks = [
+        { check: 'الجدول الدراسي', status: sch ? (conf.errors ? 'تحذير' : 'جاهز') : 'ناقص', detail: sch ? `${conf.errors} تعارضًا` : 'لم يُولّد بعد' },
+        { check: 'إسناد المعلمين', status: noTeacher ? 'ناقص' : 'جاهز', detail: `${noTeacher} إسنادًا بلا معلم` },
+        { check: 'الأنصبة', status: overloaded ? 'تحذير' : 'جاهز', detail: `${overloaded} معلمًا فوق النصاب` },
+        { check: 'جدول الاختبارات', status: (db.exams || []).length ? (examConflict.errors ? 'تحذير' : 'جاهز') : 'ناقص', detail: `${(db.exams || []).length} اختبارًا · ${examConflict.errors} تعارضًا` },
+        { check: 'المناوبات', status: db.duties.length ? (db.duties.some((d: any) => !d.teacher_id) ? 'تحذير' : 'جاهز') : 'ناقص', detail: `${db.duties.filter((d: any) => !d.teacher_id).length} شاغرة` },
+        { check: 'النسخ الاحتياطي', status: db.settings.last_backup ? 'جاهز' : 'تحذير', detail: db.settings.last_backup ? `آخر نسخة: ${fmtDate(db.settings.last_backup.slice(0, 10))}` : 'لم تُنشأ نسخة مشفّرة/احتياطية بعد' },
+      ];
+      return {
+        ...base,
+        title: 'تقرير جاهزية المدرسة',
+        subtitle: `${fmtDate(todayIso())}`,
+        columns: [{ key: 'check', label: 'الفحص' }, { key: 'status', label: 'الحالة' }, { key: 'detail', label: 'التفصيل' }],
+        rows: checks,
+        summary: [`جاهز: ${checks.filter((c) => c.status === 'جاهز').length}/${checks.length}`],
+        filename: 'تقرير-جاهزية-المدرسة',
+      };
+    }
     case 'quality': {
       const periodIdx = new Map(ctx.periods.map((p: any, i: number) => [p.id, i]));
       const quality = qualityOf(allLessons, { ...ctx, periodOrder: periodIdx });
@@ -389,6 +501,10 @@ export function catalog() {
     { type: 'covers', title: 'حصص الانتظار', icon: 'swap', needs: 'date' },
     { type: 'absence', title: 'سجل الغياب', icon: 'calendar', needs: 'range' },
     { type: 'duties', title: 'الإشراف والمناوبة', icon: 'shield' },
+    { type: 'today_schedule', title: 'جدول اليوم', icon: 'calendar', needs: 'date' },
+    { type: 'teacher_day', title: 'دوام معلم اليوم', icon: 'user', needs: 'teacher_date' },
+    { type: 'exams', title: 'جدول الاختبارات', icon: 'exam' },
+    { type: 'readiness', title: 'جاهزية المدرسة', icon: 'check' },
     { type: 'quality', title: 'جودة الجدول', icon: 'gauge' },
     { type: 'conflicts', title: 'التعارضات', icon: 'alert' },
     { type: 'unplaced', title: 'الحصص غير الموزعة', icon: 'clock' },

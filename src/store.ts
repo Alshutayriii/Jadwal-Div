@@ -11,6 +11,10 @@ import { generate } from './lib/scheduler';
 import { detect, validatePlacement } from './lib/conflicts';
 import { allocateCovers } from './lib/covers';
 import { generateDuties } from './lib/duties';
+import { generateExams as buildExamSchedule } from './lib/exams';
+import { autoAssignTeachers as runAutoAssign } from './lib/assignments';
+import { importTable } from './lib/importExport';
+import type { DataKind } from './lib/importExport';
 
 const GUARDS: Record<string, [string, string, string][]> = {
   teachers: [
@@ -18,11 +22,24 @@ const GUARDS: Record<string, [string, string, string][]> = {
     ['lessons', 'teacher_id', 'حصص الجدول'],
     ['duties', 'teacher_id', 'المناوبات'],
     ['covers', 'substitute_id', 'حصص الانتظار'],
+    ['exams', 'invigilator_id', 'جدول الاختبارات'],
   ],
-  subjects: [['assignments', 'subject_id', 'إسنادات المواد'], ['lessons', 'subject_id', 'حصص الجدول']],
-  sections: [['assignments', 'section_id', 'إسنادات المواد'], ['lessons', 'section_id', 'حصص الجدول']],
-  rooms: [['lessons', 'room_id', 'حصص الجدول'], ['sections', 'room_id', 'الشعب']],
-  grades: [['sections', 'grade_id', 'الشعب']],
+  subjects: [
+    ['assignments', 'subject_id', 'إسنادات المواد'],
+    ['lessons', 'subject_id', 'حصص الجدول'],
+    ['exams', 'subject_id', 'جدول الاختبارات'],
+  ],
+  sections: [
+    ['assignments', 'section_id', 'إسنادات المواد'],
+    ['lessons', 'section_id', 'حصص الجدول'],
+    ['exams', 'section_id', 'جدول الاختبارات'],
+  ],
+  rooms: [
+    ['lessons', 'room_id', 'حصص الجدول'],
+    ['sections', 'room_id', 'الشعب'],
+    ['exams', 'room_id', 'جدول الاختبارات'],
+  ],
+  grades: [['sections', 'grade_id', 'الشعب'], ['exams', 'grade_id', 'جدول الاختبارات']],
   supervision_areas: [['duties', 'area_id', 'المناوبات']],
 };
 
@@ -105,6 +122,13 @@ interface AppState {
   saveSchool: (patch: any) => void;
   saveAssignment: (values: any, id?: number | null) => void;
   deleteAssignment: (id: number) => void;
+  autoAssignTeachers: (options?: any) => any;
+  importData: (kind: string, rows: Record<string, string>[]) => any;
+  saveExam: (values: any, id?: number | null) => any;
+  deleteExam: (id: number) => void;
+  generateExamSchedule: (options?: any) => any;
+  clearExams: () => void;
+  setTeacherUnavailable: (teacherId: number, slots: [number, number][]) => void;
   generateSchedule: (options?: any) => any;
   publishSchedule: (id: number) => void;
   validateLesson: (candidate: any, ignoreId?: number | number[] | null) => { ok: boolean; problems: string[] };
@@ -298,6 +322,106 @@ export const useApp = create<AppState>((set, get) => ({
     const dbLessons = db.lessons.filter((l) => l.assignment_id === id).length;
     if (dbLessons) throw new Error(`لا يمكن حذف الإسناد: توجد ${dbLessons} حصة مرتبطة به في الجدول.`);
     db.assignments = db.assignments.filter((a) => a.id !== id);
+    saveDB(db);
+    set({ db });
+  },
+
+  autoAssignTeachers(options = {}) {
+    const db = clone(get().db);
+    const result = runAutoAssign(db, options);
+    const changed = new Map(result.changed.map((a) => [a.id, a]));
+    db.assignments = db.assignments.map((a) => changed.get(a.id) || a);
+    if (result.changed.length) {
+      db.audit_log.unshift({ id: uid(db.audit_log), username: get().session?.user?.username || 'system', action: 'توزيع الإسنادات', entity: 'assignments', details: `${result.changed.length} إسنادًا`, created_at: nowIso() });
+      saveDB(db);
+      set({ db });
+    }
+    return result;
+  },
+
+  importData(kind, rows) {
+    const result = importTable(get().db, kind as DataKind, rows);
+    if (result.added || result.updated) {
+      saveDB(result.db);
+      set({ db: result.db });
+    }
+    return result;
+  },
+
+  saveExam(values, id = null) {
+    const db = clone(get().db);
+    if (!values.subject_id || !values.day_id || !values.period_id) throw new Error('المادة واليوم والحصة مطلوبة.');
+    const clean = {
+      ...values,
+      subject_id: Number(values.subject_id),
+      grade_id: values.grade_id ? Number(values.grade_id) : null,
+      section_id: values.section_id ? Number(values.section_id) : null,
+      day_id: Number(values.day_id),
+      period_id: Number(values.period_id),
+      room_id: values.room_id ? Number(values.room_id) : null,
+      invigilator_id: values.invigilator_id ? Number(values.invigilator_id) : null,
+      duration: Number(values.duration) || 60,
+    };
+    let saved: any;
+    if (id) {
+      const idx = db.exams.findIndex((e) => e.id === id);
+      if (idx === -1) throw new Error('الاختبار غير موجود');
+      db.exams[idx] = { ...db.exams[idx], ...clean, id };
+      saved = db.exams[idx];
+    } else {
+      saved = { ...clean, id: uid(db.exams) };
+      db.exams.push(saved);
+    }
+    db.audit_log.unshift({ id: uid(db.audit_log), username: get().session?.user?.username || 'system', action: id ? 'تعديل اختبار' : 'إضافة اختبار', entity: 'exams', details: saved.title || String(saved.id), created_at: nowIso() });
+    saveDB(db);
+    set({ db });
+    return saved;
+  },
+
+  deleteExam(id) {
+    const db = clone(get().db);
+    const removed = db.exams.find((e) => e.id === id);
+    db.exams = db.exams.filter((e) => e.id !== id);
+    if (removed) db.audit_log.unshift({ id: uid(db.audit_log), username: get().session?.user?.username || 'system', action: 'حذف اختبار', entity: 'exams', details: String(id), created_at: nowIso() });
+    saveDB(db);
+    set({ db });
+  },
+
+  generateExamSchedule(options = {}) {
+    const db = clone(get().db);
+    if (!db.sections.filter((s) => s.active !== 0).length) throw new Error('أضف الشعب أولًا.');
+    if (!db.subjects.filter((s) => s.active !== 0).length) throw new Error('أضف المواد أولًا.');
+    const result = buildExamSchedule(db, options);
+    let id = 1;
+    db.exams = result.exams.map((e) => ({ ...e, id: id++ }));
+    db.settings.exam_settings = JSON.stringify({
+      maxPerDay: Number(options.maxPerDay) || 3,
+      periodsPerDay: Number(options.periodsPerDay) || 3,
+    });
+    db.audit_log.unshift({ id: uid(db.audit_log), username: get().session?.user?.username || 'system', action: 'توليد جدول اختبارات', entity: 'exams', details: `${result.placed} اختبارًا`, created_at: nowIso() });
+    saveDB(db);
+    set({ db });
+    return result;
+  },
+
+  clearExams() {
+    const db = clone(get().db);
+    db.exams = [];
+    db.audit_log.unshift({ id: uid(db.audit_log), username: get().session?.user?.username || 'system', action: 'مسح جدول الاختبارات', entity: 'exams', details: '', created_at: nowIso() });
+    saveDB(db);
+    set({ db });
+  },
+
+  setTeacherUnavailable(teacherId, slots) {
+    const db = clone(get().db);
+    const existing = db.teacher_unavailable.filter((u) => u.teacher_id !== teacherId);
+    let id = uid(db.teacher_unavailable);
+    for (const [dayId, periodId] of slots) {
+      existing.push({ id: id++, teacher_id: teacherId, day_id: Number(dayId), period_id: Number(periodId), reason: '' });
+    }
+    db.teacher_unavailable = existing;
+    const teacher = db.teachers.find((t) => t.id === teacherId);
+    db.audit_log.unshift({ id: uid(db.audit_log), username: get().session?.user?.username || 'system', action: 'تعديل عدم التوفر', entity: 'teachers', details: `${teacher?.name || teacherId}: ${slots.length} خانة`, created_at: nowIso() });
     saveDB(db);
     set({ db });
   },

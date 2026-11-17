@@ -12,6 +12,8 @@ const Teachers = lazy(() => import('./pages/Teachers'));
 const Subjects = lazy(() => import('./pages/Subjects'));
 const Sections = lazy(() => import('./pages/Sections'));
 const CalendarPage = lazy(() => import('./pages/Calendar'));
+const Exams = lazy(() => import('./pages/Exams'));
+const DataPage = lazy(() => import('./pages/Data'));
 const Absence = lazy(() => import('./pages/Absence'));
 const Duty = lazy(() => import('./pages/Duty'));
 const Reports = lazy(() => import('./pages/Reports'));
@@ -56,6 +58,8 @@ export default function App() {
               <Route path="sections" element={<Sections />} />
               <Route path="calendar" element={<CalendarPage />} />
               <Route path="timetable" element={<Timetable />} />
+              <Route path="exams" element={<Exams />} />
+              <Route path="data" element={<DataPage />} />
               <Route path="absence" element={<Absence />} />
               <Route path="duty" element={<Duty />} />
               <Route path="reports" element={<Reports />} />

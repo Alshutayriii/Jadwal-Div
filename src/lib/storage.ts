@@ -1,4 +1,4 @@
-import type { DB, PermissionMatrix } from '../types';
+import type { DB, Level, PermissionMatrix } from '../types';
 import seedJson from '../data/seed.json';
 import { DEMO_USERS } from './auth';
 import { nowIso } from './model';
@@ -27,7 +27,7 @@ export function normalizeSeed(): DB {
     password_hash: '',
     created_at: nowIso(),
   }));
-  return {
+  return migrateDB({
     school: raw.school[0],
     terms: raw.terms || [],
     days: raw.days || [],
@@ -40,6 +40,7 @@ export function normalizeSeed(): DB {
     teacher_subjects: raw.teacher_subjects || [],
     teacher_unavailable: raw.teacher_unavailable || [],
     assignments: raw.assignments || [],
+    exams: raw.exams || [],
     schedules: raw.schedules || [],
     lessons: raw.lessons || [],
     absences: raw.absences || [],
@@ -52,8 +53,34 @@ export function normalizeSeed(): DB {
     audit_log: raw.audit_log || [],
     settings,
     permissions,
-    version: 1,
-  };
+    version: 2,
+  });
+}
+
+/** صلاحيات افتراضية للوحدات الجديدة، مع عدم المساس بأي اختيار صريح للمستخدم. */
+const NEW_MODULE_DEFAULTS: Record<string, Record<string, string>> = {
+  exams: { system_admin: 'edit', principal: 'edit', vice: 'edit', scheduler: 'edit', teacher: 'none' },
+  data: { system_admin: 'edit', principal: 'edit', vice: 'view', scheduler: 'view', teacher: 'none' },
+};
+
+/** ترحيل قاعدة موجودة مسبقًا: يضيف الجداول والحقول الجديدة دون فقدان البيانات. */
+export function migrateDB(db: DB): DB {
+  if (!Array.isArray(db.exams)) db.exams = [];
+  if (!Array.isArray(db.teacher_unavailable)) db.teacher_unavailable = [];
+  if (!Array.isArray(db.teacher_subjects)) db.teacher_subjects = [];
+  if (!Array.isArray(db.notifications)) db.notifications = [];
+  if (!Array.isArray(db.audit_log)) db.audit_log = [];
+  if (!db.permissions) db.permissions = {} as PermissionMatrix;
+  for (const [module, levels] of Object.entries(NEW_MODULE_DEFAULTS)) {
+    for (const [role, level] of Object.entries(levels)) {
+      if (!db.permissions[role as keyof PermissionMatrix]) db.permissions[role as keyof PermissionMatrix] = {} as any;
+      if (db.permissions[role as keyof PermissionMatrix][module] === undefined) {
+        db.permissions[role as keyof PermissionMatrix][module] = level as Level;
+      }
+    }
+  }
+  db.version = Math.max(2, Number(db.version) || 1);
+  return db;
 }
 
 export function loadDB(): DB | null {
@@ -62,7 +89,7 @@ export function loadDB(): DB | null {
     if (!text) return null;
     const parsed = JSON.parse(text);
     if (!parsed || !parsed.school || !Array.isArray(parsed.teachers)) return null;
-    return parsed as DB;
+    return migrateDB(parsed as DB);
   } catch {
     return null;
   }
@@ -113,5 +140,5 @@ export function parseBackup(text: string): DB {
     for (const row of data.settings) obj[row.key] = String(row.value);
     data.settings = obj;
   }
-  return data as DB;
+  return migrateDB(data as DB);
 }
